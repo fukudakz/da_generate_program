@@ -1,35 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-日本デジタルゲーム学会 年次大会プログラム HTML 生成スクリプト
+学会プログラム HTML 生成スクリプト
 
 データソース:
-- source/session.csv  （セッション情報）
-- source/talk.csv     （各セッション内の発表）
+- input/session.csv  （セッション情報）
+- input/talk.csv     （各セッション内の発表）
+- input/conference_name.txt  （ページタイトル / 見出し）
 
 出力:
 - output/program.html （プログラムページ HTML）
 
 使い方:
-    cd digra_program_page
     python3 generate_program_html.py
 """
 
 import csv
-import os
+import html as html_lib
 import re
 from pathlib import Path
 from collections import defaultdict, OrderedDict
 from datetime import datetime
 
 BASE_DIR = Path(__file__).parent
-SOURCE_DIR = BASE_DIR / "source"
+INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
 
-SESSION_CSV = SOURCE_DIR / "session.csv"
-TALK_CSV = SOURCE_DIR / "talk.csv"
+SESSION_CSV = INPUT_DIR / "session.csv"
+TALK_CSV = INPUT_DIR / "talk.csv"
 OUTPUT_HTML = OUTPUT_DIR / "program.html"
-CONFERENCE_NAME_TXT = SOURCE_DIR / "conference_name.txt"
+CONFERENCE_NAME_TXT = INPUT_DIR / "conference_name.txt"
 
 PAGE_CSS = """
     body {
@@ -58,14 +58,19 @@ PAGE_CSS = """
       font-size: 20px;
       margin-top: 32px;
       margin-bottom: 12px;
-      border-left: 4px solid #0073a8;
+      border-left: 4px solid #0066cc;
       padding-left: 8px;
     }
     h3 {
       font-size: 17px;
       margin-top: 20px;
       margin-bottom: 8px;
-      color: #0073a8;
+      color: #0066cc;
+    }
+    h4 {
+      font-size: 15px;
+      margin: 18px 0 8px;
+      color: #0066cc;
     }
     .date-block { margin-top: 24px; }
     .session {
@@ -80,7 +85,7 @@ PAGE_CSS = """
     .session-title {
       font-size: 16px;
       font-weight: 600;
-      color: #0073a8;
+      color: #0066cc;
       margin-top: 2px;
     }
     .session-meta { font-size: 13px; color: #666; margin-bottom: 4px; }
@@ -89,26 +94,40 @@ PAGE_CSS = """
     .talk-title { font-weight: 600; }
     .talk-authors { font-size: 13px; color: #555; }
     .schedule-table-wrap { margin-top: 8px; margin-bottom: 18px; }
-    .schedule-table {
-      border-collapse: collapse;
-      width: 100%;
-      table-layout: fixed;
-      font-size: 13px;
+    /* WordPress テーマ（#content tr td など）より優先する */
+    .page-wrap .schedule-table {
+      border-collapse: collapse !important;
+      width: 100% !important;
+      table-layout: fixed !important;
+      font-size: 13px !important;
+      margin: 0 0 18px !important;
+      text-align: center !important;
+      border: 1px solid #ddd !important;
     }
-    .schedule-table th, .schedule-table td {
-      border: 1px solid #ddd;
-      padding: 4px 6px;
-      text-align: center;
-      vertical-align: top;
+    .page-wrap .schedule-table th,
+    .page-wrap .schedule-table td {
+      border: 1px solid #ddd !important;
+      padding: 4px 6px !important;
+      text-align: center !important;
+      vertical-align: top !important;
+      color: #333 !important;
+      line-height: 1.5 !important;
     }
-    .schedule-table thead th {
-      background: #f0f4f8;
-      font-weight: 600;
+    .page-wrap .schedule-table thead th {
+      background: #f0f4f8 !important;
+      font-weight: 600 !important;
+      font-size: 13px !important;
     }
-    .schedule-time { white-space: nowrap; background: #f9fafb; }
-    .schedule-table td { font-size: 12px; }
-    .schedule-table a { color: #0073a8; text-decoration: none; }
-    .schedule-table a:hover { text-decoration: underline; }
+    .page-wrap .schedule-time {
+      white-space: nowrap !important;
+      background: #f9fafb !important;
+    }
+    .page-wrap .schedule-table td {
+      font-size: 12px !important;
+      background: #fff !important;
+    }
+    .page-wrap .schedule-table a { color: #0066cc !important; text-decoration: none !important; }
+    .page-wrap .schedule-table a:hover { text-decoration: underline !important; }
     @media screen and (max-width: 600px) {
       .page-wrap { padding: 16px 8px 40px; }
       h1 { font-size: 22px; }
@@ -116,6 +135,22 @@ PAGE_CSS = """
       h3 { font-size: 16px; }
     }
 """
+
+# テーマの要素セレクタより優先される。style 属性は <style> が削られても残る。
+TABLE_STYLE = (
+    "border-collapse:collapse;width:100%;table-layout:fixed;font-size:13px;"
+    "margin:0 0 18px;text-align:center;border:1px solid #ddd;"
+)
+TH_STYLE = (
+    "border:1px solid #ddd;padding:4px 6px;text-align:center;vertical-align:top;"
+    "background:#f0f4f8;font-weight:600;font-size:13px;color:#333;line-height:1.5;"
+)
+TIME_TH_STYLE = TH_STYLE + "white-space:nowrap;background:#f9fafb;"
+TD_STYLE = (
+    "border:1px solid #ddd;padding:4px 6px;text-align:center;vertical-align:top;"
+    "font-size:12px;color:#333;line-height:1.5;background:#fff;"
+)
+LINK_STYLE = "color:#0066cc;text-decoration:none;"
 
 
 def read_sessions(path: Path):
@@ -163,37 +198,41 @@ def read_talks(path: Path):
 
 def format_date_jp(date_str: str) -> str:
     """YYYY-M-D または YYYY-MM-DD 形式の日付を「YYYY年M月D日(曜)」に整形"""
-    try:
-        # ハイフン区切りを想定（例: 2026-2-21）
-        dt = datetime.strptime(date_str, "%Y-%m-%d")
-    except ValueError:
-        try:
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-        except ValueError:
-            # フォーマットが不明な場合はそのまま返す
-            return date_str
-
+    parts = date_str.split("-")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return date_str
+    dt = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
     weekday_map = ["月", "火", "水", "木", "金", "土", "日"]
-    youbi = weekday_map[dt.weekday()]
-    return f"{dt.year}年{dt.month}月{dt.day}日（{youbi}）"
+    return f"{dt.year}年{dt.month}月{dt.day}日（{weekday_map[dt.weekday()]}）"
+
+
+def read_conference_name(path: Path) -> str:
+    """input/conference_name.txt の最初の空でない行を大会名にする。"""
+    if not path.exists():
+        raise FileNotFoundError(f"大会名ファイルがありません: {path}")
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
+        name = line.strip()
+        if name:
+            return name
+    raise ValueError(f"{path} が空です。大会名を1行書いてください。")
 
 
 _TIME_PATTERN = re.compile(r"(\d{1,2}):(\d{2})")
-SPECIAL_ROOM_KEYWORDS = ("受付", "懇親会", "昼食", "休憩", "見学会")
+_ROOM_NUMBER = re.compile(r"\d+")
+
+
+def room_sort_key(room: str):
+    """部屋番号の昇順。番号が無い会場（後日公開など）は右端。"""
+    numbers = tuple(int(n) for n in _ROOM_NUMBER.findall(room))
+    if not numbers:
+        return (1, room)
+    return (0, numbers, room)
 
 
 def get_rooms_sorted_for_timetable(sess_list):
-    """
-    タイムテーブル用の列順。
-    セルの値（セッション名）にSPECIAL_ROOM_KEYWORDSが含まれる部屋を右側に寄せる。
-    """
+    """タイムテーブルの列順。21号館312, 313, … のあと、番号の無い会場。"""
     all_rooms = {s["room"] for s in sess_list}
-    special_rooms = {
-        s["room"]
-        for s in sess_list
-        if any(k in s["name"] for k in SPECIAL_ROOM_KEYWORDS)
-    }
-    return sorted(all_rooms, key=lambda r: (1 if r in special_rooms else 0, r))
+    return sorted(all_rooms, key=room_sort_key)
 
 
 def start_time_key(time_str: str):
@@ -236,20 +275,22 @@ def group_sessions_by_date(sessions):
 def generate_html(sessions, talks_by_session, conference_name: str):
     """HTML文字列を生成"""
     grouped = group_sessions_by_date(sessions)
+    title = html_lib.escape(conference_name)
 
     html = []
     html.append("<!DOCTYPE html>")
     html.append('<html lang="ja">')
     html.append("<head>")
     html.append('  <meta charset="UTF-8">')
-    html.append("  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">")
-    html.append(f"  <title>{conference_name}</title>")
-    html.append(f"  <style>{PAGE_CSS}</style>")
+    html.append('  <meta name="viewport" content="width=device-width, initial-scale=1">')
+    html.append(f"  <title>{title}</title>")
     html.append("</head>")
     html.append("<body>")
     html.append('<div class="page-wrap">')
+    # <style> を本文側に置く。WordPress ではこの div ごとカスタムHTMLへ貼る。
+    html.append(f"<style>{PAGE_CSS}</style>")
 
-    html.append(f"<h1>{conference_name}</h1>")
+    html.append(f"<h1>{title}</h1>")
 
     # まず全日程のタイムテーブルをまとめて表示
     html.append("<h2>タイムテーブル</h2>")
@@ -258,37 +299,45 @@ def generate_html(sessions, talks_by_session, conference_name: str):
         html.append(f"  <h3>{format_date_jp(date_str)}</h3>")
 
         rooms = get_rooms_sorted_for_timetable(sess_list)
+        rooms = [r for r in rooms if r] or [""]
         times = sorted({s["time"] for s in sess_list}, key=start_time_key)
+        hide_room_header = rooms == [""]
 
-        if rooms and times:
+        if times:
             time_room_index = defaultdict(list)
             for s in sess_list:
-                time_room_index[(s["time"], s["room"])].append(s)
+                key_room = s["room"] if not hide_room_header else ""
+                time_room_index[(s["time"], key_room)].append(s)
 
             html.append('  <div class="schedule-table-wrap">')
-            html.append('    <table class="schedule-table">')
+            html.append(f'    <table class="schedule-table" style="{TABLE_STYLE}">')
             html.append("      <thead>")
             html.append("        <tr>")
-            html.append('          <th class="schedule-time">時間</th>')
-            for room in rooms:
-                html.append(f"          <th>{room}</th>")
+            html.append(f'          <th class="schedule-time" style="{TIME_TH_STYLE}">時間</th>')
+            if hide_room_header:
+                html.append(f'          <th style="{TH_STYLE}">内容</th>')
+            else:
+                for room in rooms:
+                    html.append(f'          <th style="{TH_STYLE}">{html_lib.escape(room)}</th>')
             html.append("        </tr>")
             html.append("      </thead>")
             html.append("      <tbody>")
             for t in times:
                 html.append("        <tr>")
-                html.append(f'          <th class="schedule-time">{t}</th>')
-                for room in rooms:
+                html.append(
+                    f'          <th class="schedule-time" style="{TIME_TH_STYLE}">{html_lib.escape(t)}</th>'
+                )
+                cols = rooms
+                for room in cols:
                     cell_sessions = time_room_index.get((t, room), [])
                     if cell_sessions:
-                        # セッション詳細へのページ内リンク
                         links = "<br>".join(
-                            f'<a href="#session-{ses["id"]}">{ses["name"]}</a>'
+                            f'<a href="#session-{html_lib.escape(ses["id"])}" style="{LINK_STYLE}">{html_lib.escape(ses["name"])}</a>'
                             for ses in cell_sessions
                         )
-                        html.append(f"          <td>{links}</td>")
+                        html.append(f'          <td style="{TD_STYLE}">{links}</td>')
                     else:
-                        html.append("          <td></td>")
+                        html.append(f'          <td style="{TD_STYLE}"></td>')
                 html.append("        </tr>")
             html.append("      </tbody>")
             html.append("    </table>")
@@ -310,33 +359,29 @@ def generate_html(sessions, talks_by_session, conference_name: str):
 
         # 時間順に出力（開始時刻でソート）
         for time_str in sorted(sessions_by_time.keys(), key=start_time_key):
-            html.append(f'  <h4>{time_str}</h4>')
+            html.append(f"  <h4>{html_lib.escape(time_str)}</h4>")
 
             # 同じ時間帯のセッションは教室名（room）でソート
             for s in sorted(sessions_by_time[time_str], key=lambda x: x["room"]):
                 sid = s["id"]
-                anchor_id = f"session-{sid}"
+                anchor_id = f"session-{html_lib.escape(sid)}"
                 html.append('  <div class="session">')
-                # セッションヘッダ: 場所とセッション名を分けて表示
                 html.append('    <div class="session-header">')
-                html.append(f'      <div class="session-location">{s["room"]}</div>')
-                html.append(f'      <div class="session-title" id="{anchor_id}">{s["name"]}</div>')
+                if s["room"]:
+                    html.append(f'      <div class="session-location">{html_lib.escape(s["room"])}</div>')
+                html.append(f'      <div class="session-title" id="{anchor_id}">{html_lib.escape(s["name"])}</div>')
                 html.append("    </div>")
-                # 座長などメタ情報
                 if s["chair"]:
-                    html.append(f'    <div class="session-meta">座長：{s["chair"]}</div>')
+                    html.append(f'    <div class="session-meta">座長：{html_lib.escape(s["chair"])}</div>')
 
-                # 発表一覧（登録がある場合のみ表示）
                 talks = talks_by_session.get(sid, [])
                 if talks:
                     html.append('    <ol class="talk-list">')
                     for t in talks:
                         html.append("      <li>")
-                        title = t["title"]
-                        authors = t["authors"]
-                        html.append(f'        <div class="talk-title">{title}</div>')
-                        if authors:
-                            html.append(f'        <div class="talk-authors">{authors}</div>')
+                        html.append(f'        <div class="talk-title">{html_lib.escape(t["title"])}</div>')
+                        if t["authors"]:
+                            html.append(f'        <div class="talk-authors">{html_lib.escape(t["authors"])}</div>')
                         html.append("      </li>")
                     html.append("    </ol>")
 
@@ -358,6 +403,9 @@ def main():
     if not TALK_CSV.exists():
         print(f"エラー: {TALK_CSV} が見つかりません")
         return
+    if not CONFERENCE_NAME_TXT.exists():
+        print(f"エラー: {CONFERENCE_NAME_TXT} が見つかりません")
+        return
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -370,11 +418,8 @@ def main():
     total_talks = sum(len(v) for v in talks_by_session.values())
     print(f"  発表数: {total_talks}")
 
-    # 大会名の読み込み（なければデフォルト値）
-    if CONFERENCE_NAME_TXT.exists():
-        conference_name = CONFERENCE_NAME_TXT.read_text(encoding="utf-8").strip()
-    else:
-        conference_name = "日本デジタルゲーム学会 年次大会 プログラム"
+    conference_name = read_conference_name(CONFERENCE_NAME_TXT)
+    print(f"  大会名: {conference_name}")
 
     print("HTMLを生成中...")
     html = generate_html(sessions, talks_by_session, conference_name)
