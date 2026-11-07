@@ -32,20 +32,16 @@ OUTPUT_HTML = OUTPUT_DIR / "program.html"
 CONFERENCE_NAME_TXT = INPUT_DIR / "conference_name.txt"
 
 PAGE_CSS = """
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
-      line-height: 1.7;
-      font-size: 15px;
-      color: #333;
-      background: #f5f5f5;
-      margin: 0;
-      padding: 0;
-    }
+    .wp-block-columns, .wp-block-column { display: block; width: 100%; }
     .page-wrap {
       max-width: 960px;
       margin: 0 auto;
       padding: 32px 16px 64px;
       background: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
+      line-height: 1.7;
+      font-size: 15px;
+      color: #333;
     }
     h1 {
       font-size: 26px;
@@ -72,6 +68,7 @@ PAGE_CSS = """
       margin: 18px 0 8px;
       color: #0066cc;
     }
+    .page-wrap a { text-decoration: underline; }
     .date-block { margin-top: 24px; }
     .session {
       margin: 8px 0 14px;
@@ -91,10 +88,30 @@ PAGE_CSS = """
     .session-meta { font-size: 13px; color: #666; margin-bottom: 4px; }
     .talk-list { margin: 6px 0 0 1.5em; padding: 0; }
     .talk-list li { margin-bottom: 6px; }
-    .talk-title { font-weight: 600; }
+    .talk-title { font-weight: 600; line-height: 1.65; }
     .talk-authors { font-size: 13px; color: #555; }
+    .page-wrap .student-mark {
+      display: inline-block !important;
+      margin: 0 0.45em 0 0 !important;
+      padding: 0.12em 0.42em 0.14em !important;
+      border: 0 !important;
+      border-radius: 3px !important;
+      background: #e8f2fc !important;
+      color: #0d5cb6 !important;
+      font-size: 0.72em !important;
+      font-weight: 700 !important;
+      line-height: 1.35 !important;
+      letter-spacing: 0.06em !important;
+      vertical-align: 0.12em !important;
+      white-space: nowrap !important;
+    }
+    .page-wrap .student-note {
+      margin-top: 28px !important;
+      font-size: 13px !important;
+      color: #555 !important;
+    }
     .schedule-table-wrap { margin-top: 8px; margin-bottom: 18px; }
-    /* WordPress テーマ（#content tr td など）より優先する */
+    /* 公開ページと同じく、表は親の幅いっぱいに列を均等配置する */
     .page-wrap .schedule-table {
       border-collapse: collapse !important;
       width: 100% !important;
@@ -126,8 +143,7 @@ PAGE_CSS = """
       font-size: 12px !important;
       background: #fff !important;
     }
-    .page-wrap .schedule-table a { color: #0066cc !important; text-decoration: none !important; }
-    .page-wrap .schedule-table a:hover { text-decoration: underline !important; }
+    .page-wrap .schedule-table a { color: #0066cc !important; text-decoration: underline !important; }
     @media screen and (max-width: 600px) {
       .page-wrap { padding: 16px 8px 40px; }
       h1 { font-size: 22px; }
@@ -150,7 +166,32 @@ TD_STYLE = (
     "border:1px solid #ddd;padding:4px 6px;text-align:center;vertical-align:top;"
     "font-size:12px;color:#333;line-height:1.5;background:#fff;"
 )
-LINK_STYLE = "color:#0066cc;text-decoration:none;"
+LINK_STYLE = "color:#0066cc;text-decoration:underline;"
+STUDENT_MARK_STYLE = (
+    "display:inline-block;margin:0 0.45em 0 0;padding:0.12em 0.42em 0.14em;"
+    "border:0;border-radius:3px;background:#e8f2fc;color:#0d5cb6;"
+    "font-size:0.72em;font-weight:700;line-height:1.35;letter-spacing:0.06em;"
+    "vertical-align:0.12em;white-space:nowrap;"
+)
+
+
+def student_mark_html() -> str:
+    return f'<span class="student-mark" style="{STUDENT_MARK_STYLE}">学生</span>'
+
+
+def format_talk_title(talk: dict) -> str:
+    """発表タイトル。学生発表は先頭に、本文の行に乗る印を付ける。"""
+    title = html_lib.escape(talk["title"])
+    url = talk.get("url") or ""
+    if url:
+        href = html_lib.escape(url, quote=True)
+        title = (
+            f'<a href="{href}" style="{LINK_STYLE}"'
+            f' target="_blank" rel="noopener noreferrer">{title}</a>'
+        )
+    if talk.get("student"):
+        title = student_mark_html() + title
+    return title
 
 
 def read_sessions(path: Path):
@@ -186,6 +227,8 @@ def read_talks(path: Path):
                     "easychair_id": row["easychair_paper_ID"].strip(),
                     "authors": row["著者"].strip(),
                     "title": row["タイトル"].strip(),
+                    "url": (row.get("URL") or "").strip(),
+                    "student": (row.get("学生発表") or "").strip() == "1",
                 }
             )
 
@@ -286,8 +329,10 @@ def generate_html(sessions, talks_by_session, conference_name: str):
     html.append(f"  <title>{title}</title>")
     html.append("</head>")
     html.append("<body>")
+    # 公開ページと同じ全幅カラム。テーマの狭い本文幅に押し込まれないようにする。
+    html.append('<div class="wp-block-columns">')
+    html.append('<div class="wp-block-column" style="flex-basis:100%">')
     html.append('<div class="page-wrap">')
-    # <style> を本文側に置く。WordPress ではこの div ごとカスタムHTMLへ貼る。
     html.append(f"<style>{PAGE_CSS}</style>")
 
     html.append(f"<h1>{title}</h1>")
@@ -379,7 +424,7 @@ def generate_html(sessions, talks_by_session, conference_name: str):
                     html.append('    <ol class="talk-list">')
                     for t in talks:
                         html.append("      <li>")
-                        html.append(f'        <div class="talk-title">{html_lib.escape(t["title"])}</div>')
+                        html.append(f'        <div class="talk-title">{format_talk_title(t)}</div>')
                         if t["authors"]:
                             html.append(f'        <div class="talk-authors">{html_lib.escape(t["authors"])}</div>')
                         html.append("      </li>")
@@ -389,7 +434,15 @@ def generate_html(sessions, talks_by_session, conference_name: str):
 
         html.append("</div>")  # .date-block
 
+    if any(t.get("student") for talks in talks_by_session.values() for t in talks):
+        html.append(
+            '<p class="student-note" style="margin-top:28px;font-size:13px;color:#555;">'
+            f"※{student_mark_html()}は優秀学生発表賞の選考対象です</p>"
+        )
+
     html.append("</div>")  # .page-wrap
+    html.append("</div>")  # .wp-block-column
+    html.append("</div>")  # .wp-block-columns
     html.append("</body>")
     html.append("</html>")
 
